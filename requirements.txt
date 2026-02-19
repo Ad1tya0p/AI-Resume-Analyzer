@@ -4,3 +4,4 @@ langchain-groq
 pydantic
 pdfminer.six
 python-dotenv
+fpdf2
