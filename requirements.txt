@@ -1,0 +1,6 @@
+streamlit
+langchain
+langchain-groq
+pydantic
+pdfminer.six
+python-dotenv
