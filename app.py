@@ -23,95 +23,105 @@ class OptimizedProfile(BaseModel):
     ats_score: int = Field(description="ATS match score from 0-100")
     optimization_points: List[str] = Field(description="List of specific improvements made")
 
-# --- STEP 2: PDF Logic ---
+# --- STEP 2: PDF Logic (Fixed for Margin Errors) ---
 class ResumePDF(FPDF):
+    def header(self):
+        self.set_font("helvetica", "B", 18)
+        self.set_text_color(33, 37, 41)
+        self.cell(0, 10, self.candidate_name.upper(), ln=True, align="C")
+        self.set_font("helvetica", "", 9)
+        self.cell(0, 5, f"{self.email} | {self.phone}", ln=True, align="C")
+        self.ln(5)
+
+    def section_header(self, title, width):
+        self.set_font("helvetica", "B", 11)
+        self.set_fill_color(245, 245, 245)
+        self.cell(width, 8, f"  {title}", ln=True, fill=True)
+        self.ln(2)
+
     def generate(self, data):
+        self.candidate_name = data['name']
+        self.email = data['email']
+        self.phone = data['phone']
+        
+        # Explicitly set margins to prevent "Not enough horizontal space" error
+        self.set_margins(15, 15, 15)
         self.add_page()
-        self.set_font("helvetica", "B", 16)
-        self.cell(0, 10, data['name'].upper(), ln=True, align="C")
-        self.set_font("helvetica", "", 10)
-        self.cell(0, 5, f"{data['email']} | {data['phone']}", ln=True, align="C")
-        self.ln(10)
+        self.set_auto_page_break(auto=True, margin=15)
         
-        sections = [("SUMMARY", data['summary']), ("SKILLS", ", ".join(data['skills'])), 
-                    ("EXPERIENCE", data['experience']), ("EDUCATION", data['education'])]
+        # Calculate effective width (Page width - margins)
+        eff_width = self.w - 30 
         
+        sections = [
+            ("PROFESSIONAL SUMMARY", data['summary']),
+            ("TECHNICAL EXPERTISE", ", ".join(data['skills'])),
+            ("EXPERIENCE", data['experience']),
+            ("EDUCATION", data['education'])
+        ]
+
         for title, content in sections:
-            self.set_font("helvetica", "B", 12)
-            self.cell(0, 10, title, ln=True)
+            self.section_header(title, eff_width)
             self.set_font("helvetica", "", 10)
             if isinstance(content, list):
                 for item in content:
-                    self.multi_cell(0, 6, f"- {item}")
+                    # Use eff_width instead of 0 to ensure wrapping space
+                    self.multi_cell(eff_width, 6, f"- {item}")
+                    self.ln(1)
             else:
-                self.multi_cell(0, 6, content)
-            self.ln(5)
+                self.multi_cell(eff_width, 6, content)
+            self.ln(4)
 
 # --- STEP 3: Streamlit UI ---
-st.set_page_config(page_title="NLP Resume Optimizer", layout="wide")
-st.title("🚀 Professional NLP Resume Engine")
+st.set_page_config(page_title="AI Resume Parser", layout="wide")
+st.title("🚀 Universal Professional Resume Engine")
+
+if "data" not in st.session_state:
+    st.session_state.data = None
 
 col1, col2 = st.columns([1, 1.2])
 
 with col1:
-    st.subheader("📤 Source Data")
+    st.subheader("📤 Upload Source")
     uploaded_file = st.file_uploader("Upload PDF Resume", type="pdf")
     job_desc = st.text_area("Target Job Description", height=200)
 
     if st.button("Parse & Optimize"):
         if uploaded_file and job_desc:
-            with st.spinner("NLP Engine Analyzing..."):
+            with st.spinner("Extracting & Optimizing..."):
                 raw_text = pdfminer.high_level.extract_text(io.BytesIO(uploaded_file.read()))
-                
                 llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.1)
                 parser = JsonOutputParser(pydantic_object=OptimizedProfile)
                 prompt = ChatPromptTemplate.from_template(
-                    "Act as an NLP Parser. Extract the candidate's name, email, phone, and education. "
-                    "Then optimize the summary, skills, and experience for this JD.\n\n"
+                    "Extract candidate name, email, phone, and education. Optimize for JD.\n"
                     "Resume: {text}\nJD: {jd}\n{format_instructions}"
                 )
-                
                 chain = prompt | llm | parser
                 st.session_state.data = chain.invoke({"text": raw_text, "jd": job_desc, "format_instructions": parser.get_format_instructions()})
 
 with col2:
-    if "data" in st.session_state:
+    if st.session_state.data:
         data = st.session_state.data
+        st.subheader(f"👤 Candidate: {data['name']}")
         
-        # --- NEW: NLP Extraction View ---
-        st.subheader("🔍 NLP Extraction Breakdown")
-        tabs = st.tabs(["👤 Profile", "🛠 Skills", "💼 Experience", "🎓 Education"])
-        
+        # NLP Breakdown Tabs
+        tabs = st.tabs(["📊 Score", "🛠 Skills", "💼 Experience", "🎓 Education"])
         with tabs[0]:
-            st.markdown(f"**Name:** {data['name']}")
-            st.markdown(f"**Email:** {data['email']}")
-            st.markdown(f"**Phone:** {data['phone']}")
-        
+            st.metric("ATS Match", f"{data['ats_score']}%")
+            for p in data['optimization_points']:
+                st.success(f"Optimized: {p}")
         with tabs[1]:
-            st.write(data['skills'])
-            
+            st.write(", ".join(data['skills']))
         with tabs[2]:
-            for exp in data['experience']:
-                st.write(f"🔹 {exp}")
-        
+            for e in data['experience']:
+                st.write(f"🔹 {e}")
         with tabs[3]:
-            for edu in data['education']:
-                st.write(f"📖 {edu}")
+            for ed in data['education']:
+                st.write(f"📖 {ed}")
 
-        st.divider()
-        
-        # --- Optimization Section ---
-        st.subheader(f"📊 ATS Score: {data['ats_score']}%")
-        with st.expander("✨ Optimization Highlights", expanded=True):
-            for point in data['optimization_points']:
-                st.success(f"**Improvement:** {point}")
-
-        # PDF Generation
+        # PDF Export
         pdf = ResumePDF()
         pdf.generate(data)
         pdf.output("result.pdf")
         
         with open("result.pdf", "rb") as f:
-            st.download_button(f"📥 Download Optimized PDF for {data['name']}", f, f"{data['name']}_Resume.pdf")
-    else:
-        st.info("Upload your resume and click 'Parse' to see the NLP breakdown.")
+            st.download_button(f"📥 Download Optimized PDF", f, f"{data['name']}_Resume.pdf")
